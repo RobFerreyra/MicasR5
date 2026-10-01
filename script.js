@@ -7,6 +7,7 @@ const ALGOLIA_HEADERS = {
   "x-algolia-api-key": "fd30299f673cd3e16f69bffb681bed90"
 };
 const CAC_URL = "https://default391f73b7a59043ad98f08b05098acc.c8.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/22/workflows/0bddd937a38c47a6a5293948dfecfd59/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=pOadBxSfPGzXAGUQXDW-ziJ3FlA2EjnVvPtKPIFzbyY";
+const ASESOR_URL = "https://default391f73b7a59043ad98f08b05098acc.c8.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/10/workflows/fdede76d302a4c3c8ab2a838422c1038/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=8Mn9OZZ_y63PYuEnnju7GftOhME09Fi4rsim3sdfMVQ";
 const CAC_HEADERS = {
   accept: "application/json",
   "content-type": "application/json"
@@ -71,6 +72,41 @@ async function cargarDatosCAC() {
     cacs: registros.map(normalizarCAC),
     catalogos: datos?.Catalogos ?? {}
   };
+}
+
+async function buscarAsesor(cac, numeroEmpleado) {
+  const respuesta = await fetch(ASESOR_URL, {
+    method: "POST",
+    headers: CAC_HEADERS,
+    body: JSON.stringify({
+      tabla: `Tabla${cac}`,
+      numero: String(numeroEmpleado)
+    })
+  });
+
+  if (!respuesta.ok) {
+    throw new Error(`No fue posible validar al asesor (${respuesta.status}).`);
+  }
+
+  const datos = await respuesta.json();
+  const codigoRespuesta = Number(datos?.statusCode);
+
+  if (datos?.statusCode !== undefined && (codigoRespuesta < 200 || codigoRespuesta >= 300)) {
+    throw new Error(`El flujo no pudo validar al asesor (${datos.statusCode}).`);
+  }
+
+  const cuerpo = datos?.body ?? datos;
+  const registro = Array.isArray(cuerpo) ? cuerpo[0] : cuerpo;
+
+  if (Array.isArray(cuerpo) && cuerpo.length === 0) {
+    return "";
+  }
+
+  if (!registro || typeof registro !== "object" || Array.isArray(registro)) {
+    throw new Error("La respuesta de validación del asesor no tiene un formato válido.");
+  }
+
+  return String(registro.Nombre ?? "").trim();
 }
 
 function extraerRegistrosCAC(datos) {
@@ -180,11 +216,19 @@ const searchInput = document.querySelector("#terminoBusqueda");
 const suggestions = document.querySelector("#sugerencias");
 const searchStatus = document.querySelector("#search-status");
 const selectionStatus = document.querySelector("#selection-status");
+const copyDataButton = document.querySelector("#copy-data-button");
 const equipmentForm = document.querySelector("#equipo-form");
 const imeiInput = document.querySelector("#imei");
 const imeiStatus = document.querySelector("#imei-status");
 const numeroEmpleadoInput = document.querySelector("#numeroEmpleado");
+const numeroEmpleadoStatus = document.querySelector("#numero-empleado-status");
 const gacInput = document.querySelector("#gac");
+const gacStatus = document.querySelector("#gac-status");
+const nombreAsesorInput = document.querySelector("#nombreAsesor");
+const advisorLookupStatus = document.querySelector("#advisor-lookup-status");
+const analistaEqInput = document.querySelector("#analistaEq");
+const facturaInput = document.querySelector("#factura");
+const codigoQRInput = document.querySelector("#codigoQR");
 const operadorSelect = document.querySelector("#operador");
 const cacSelect = document.querySelector("#cac");
 const cacSelectWrapper = cacSelect.closest(".select-wrapper");
@@ -211,39 +255,123 @@ let displayedProducts = [];
 let activeSuggestionIndex = -1;
 let searchRequestId = 0;
 let debounceTimer;
+let advisorLookupTimer;
+let advisorLookupRequestId = 0;
+let selectedProduct = null;
 let cacRecords = [];
 let garantiasCatalogo = [];
+const MAXIMUM_EMPLOYEE_NUMBER = 65535;
 
 function sincronizarGACDesdeNumeroEmpleado() {
   const numeroEmpleado = numeroEmpleadoInput.value.trim();
 
-  if (!/^\d{1,5}$/.test(numeroEmpleado)) {
+  if (!/^\d{1,5}$/.test(numeroEmpleado) || Number(numeroEmpleado) > MAXIMUM_EMPLOYEE_NUMBER) {
     gacInput.value = "";
-    return;
+  } else if (numeroEmpleado) {
+    const hexadecimal = Number(numeroEmpleado).toString(16).toUpperCase().padStart(4, "0");
+    gacInput.value = `GAC${hexadecimal}`;
+  } else {
+    gacInput.value = "";
   }
 
-  gacInput.value = `GAC${Number(numeroEmpleado).toString(16).toUpperCase()}`;
+  actualizarValidacionIdentificadores();
+  programarConsultaAsesor();
 }
 
 function sincronizarNumeroEmpleadoDesdeGAC() {
   const gac = gacInput.value.trim().toUpperCase();
-  const coincidencia = /^GAC([0-9A-F]+)$/.exec(gac);
+  const coincidencia = /^GAC([0-9A-F]{4})$/.exec(gac);
 
   gacInput.value = gac;
 
   if (!coincidencia) {
     numeroEmpleadoInput.value = "";
+  } else {
+    const numeroEmpleado = Number.parseInt(coincidencia[1], 16);
+    numeroEmpleadoInput.value = numeroEmpleado <= MAXIMUM_EMPLOYEE_NUMBER
+      ? String(numeroEmpleado)
+      : "";
+  }
+
+  actualizarValidacionIdentificadores();
+  programarConsultaAsesor();
+}
+
+function programarConsultaAsesor() {
+  clearTimeout(advisorLookupTimer);
+  const requestId = ++advisorLookupRequestId;
+  const cac = cacSelect.value.trim();
+  const numeroEmpleado = numeroEmpleadoInput.value.trim();
+  const numeroValido = /^\d{1,5}$/.test(numeroEmpleado)
+    && Number(numeroEmpleado) <= MAXIMUM_EMPLOYEE_NUMBER;
+
+  nombreAsesorInput.value = "";
+  nombreAsesorInput.setCustomValidity("");
+  advisorLookupStatus.textContent = "";
+  advisorLookupStatus.classList.remove("is-error");
+
+  if (!cac || !numeroValido) {
     return;
   }
 
-  const numeroEmpleado = Number.parseInt(coincidencia[1], 16);
-  numeroEmpleadoInput.value = Number.isSafeInteger(numeroEmpleado) && numeroEmpleado <= 99999
-    ? String(numeroEmpleado)
-    : "";
+  advisorLookupStatus.textContent = "Validando asesor...";
+  advisorLookupTimer = setTimeout(async () => {
+    try {
+      const nombre = await buscarAsesor(cac, numeroEmpleado);
+
+      if (requestId !== advisorLookupRequestId) {
+        return;
+      }
+
+      if (!nombre) {
+        advisorLookupStatus.textContent = "No se encontró un asesor para este CAC y número.";
+        return;
+      }
+
+      nombreAsesorInput.value = nombre;
+      advisorLookupStatus.textContent = "Asesor validado.";
+    } catch (error) {
+      if (requestId !== advisorLookupRequestId) {
+        return;
+      }
+
+      nombreAsesorInput.value = "";
+      advisorLookupStatus.textContent = error.message || "No fue posible validar al asesor.";
+      advisorLookupStatus.classList.add("is-error");
+    }
+  }, 300);
+}
+
+function actualizarValidacionIdentificadores() {
+  const numeroEmpleado = numeroEmpleadoInput.value.trim();
+  const gac = gacInput.value.trim();
+  let mensajeNumero = "";
+  let mensajeGAC = "";
+
+  if (numeroEmpleado && !/^\d{1,5}$/.test(numeroEmpleado)) {
+    mensajeNumero = "El número de empleado debe contener solo números y hasta 5 dígitos.";
+  } else if (numeroEmpleado && Number(numeroEmpleado) > MAXIMUM_EMPLOYEE_NUMBER) {
+    mensajeNumero = "El número de empleado no puede ser mayor que 65535.";
+  }
+
+  if (gac && !/^GAC[0-9A-F]{4}$/.test(gac)) {
+    mensajeGAC = "El GAC debe tener 7 caracteres: GAC seguido de 4 dígitos hexadecimales.";
+  }
+
+  numeroEmpleadoInput.setCustomValidity(mensajeNumero);
+  numeroEmpleadoInput.setAttribute("aria-invalid", String(Boolean(mensajeNumero)));
+  gacInput.setCustomValidity(mensajeGAC);
+  gacInput.setAttribute("aria-invalid", String(Boolean(mensajeGAC)));
+  numeroEmpleadoStatus.textContent = mensajeNumero || (numeroEmpleado ? "Número de empleado válido." : "");
+  numeroEmpleadoStatus.classList.toggle("is-error", Boolean(mensajeNumero));
+  gacStatus.textContent = mensajeGAC || (gac ? "GAC válido." : "");
+  gacStatus.classList.toggle("is-error", Boolean(mensajeGAC));
 }
 
 numeroEmpleadoInput.addEventListener("input", sincronizarGACDesdeNumeroEmpleado);
 gacInput.addEventListener("input", sincronizarNumeroEmpleadoDesdeGAC);
+numeroEmpleadoInput.addEventListener("blur", actualizarValidacionIdentificadores);
+gacInput.addEventListener("blur", actualizarValidacionIdentificadores);
 
 function validarDigitoIMEI(valor) {
   let suma = 0;
@@ -273,11 +401,11 @@ function actualizarValidacionIMEI(mostrarIncompleto = false) {
   let mensaje = "";
 
   if (valor && !/^\d+$/.test(valor)) {
-    mensaje = "El IMEI debe contener solo números.";
+    mensaje = "Debe contener solo números.";
   } else if (valor && valor.length !== 15) {
-    mensaje = "El IMEI debe contener exactamente 15 dígitos.";
+    mensaje = "Debe contener 15 dígitos.";
   } else if (valor && !validarDigitoIMEI(valor)) {
-    mensaje = "El dígito verificador del IMEI no es válido.";
+    mensaje = "IMEI no es válido.";
   }
 
   const mostrarMensaje = !mensaje || mostrarIncompleto || valor.length === 15 || !/^\d+$/.test(valor);
@@ -396,6 +524,7 @@ function restaurarCACGuardado() {
   cacSelect.value = registro.cac;
   mostrarDatosCAC(registro);
   actualizarFolio();
+  programarConsultaAsesor();
 }
 
 async function iniciarDatosCAC() {
@@ -485,16 +614,175 @@ function seleccionarProducto(index) {
     return;
   }
 
+  selectedProduct = producto;
+  searchInput.setCustomValidity("");
   detailInputs.brand.value = producto.brand;
   detailInputs.model.value = producto.model;
   detailInputs.identifier.value = producto.identifier;
   detailInputs.productPrice.value = producto.productPrice === "" ? "" : `$${producto.productPrice}`;
   if (selectionStatus) {
     selectionStatus.textContent = `Equipo seleccionado: ${producto.displayName}`;
+    selectionStatus.classList.remove("is-error");
   }
   searchInput.value = producto.displayName;
   ocultarSugerencias();
   mostrarEstado("");
+}
+
+function limpiarProductoSeleccionado() {
+  selectedProduct = null;
+  Object.values(detailInputs).forEach((input) => {
+    input.value = "";
+  });
+  if (selectionStatus) {
+    selectionStatus.textContent = "Selecciona un equipo para completar sus datos.";
+    selectionStatus.classList.remove("is-error");
+  }
+}
+
+function primerErrorDeCopia() {
+  actualizarValidacionIdentificadores();
+  actualizarValidacionIMEI(true);
+
+  const camposRequeridos = [
+    [cacSelect, "Selecciona un CAC."],
+    [cacInputs.nombre, "El CAC seleccionado no tiene nombre."],
+    [cacInputs.region, "El CAC seleccionado no tiene región."],
+    [cacInputs.almacen, "El CAC seleccionado no tiene almacén."],
+    [analistaEqInput, "Ingresa el número de analista."],
+    [numeroEmpleadoInput, "Ingresa un número de empleado válido."],
+    [gacInput, "Ingresa un GAC válido."],
+    [nombreAsesorInput, "Espera a que el asesor termine de validarse."],
+    [imeiInput, "Ingresa un IMEI válido."],
+    [operadorSelect, "Selecciona un operador."],
+    [conceptoSelect, "Selecciona un concepto."],
+    [facturaInput, "Ingresa una factura numérica."],
+    [codigoQRInput, "Ingresa el código QR."],
+    [folioInput, "Ingresa el folio."],
+    [micaSelect, "Selecciona una mica."]
+  ];
+
+  for (const [input, mensaje] of camposRequeridos) {
+    if (!String(input.value ?? "").trim()) {
+      return { input, mensaje };
+    }
+
+    if (!input.validity.valid) {
+      return { input, mensaje: input.validationMessage || mensaje };
+    }
+  }
+
+  if (!selectedProduct) {
+    return { input: searchInput, mensaje: "Selecciona un equipo de los resultados." };
+  }
+
+  for (const input of [detailInputs.brand, detailInputs.identifier, detailInputs.model]) {
+    if (!input.value.trim()) {
+      return { input, mensaje: "El equipo seleccionado no contiene todos sus datos." };
+    }
+  }
+
+  const precio = String(selectedProduct.productPrice ?? "").trim().replace(/[$,\s]/g, "");
+  if (!precio || !Number.isFinite(Number(precio))) {
+    return { input: detailInputs.productPrice, mensaje: "El precio del equipo no es numérico." };
+  }
+
+  if (conceptoEsGarantia()) {
+    if (!garantiaSelect.value) {
+      return { input: garantiaSelect, mensaje: "Selecciona una garantía." };
+    }
+    if (!micaEntregadaSelect.value) {
+      return { input: micaEntregadaSelect, mensaje: "Selecciona la mica entregada." };
+    }
+  }
+
+  return null;
+}
+
+function mostrarErrorDeCopia(error) {
+  const { input, mensaje } = error;
+  selectionStatus.textContent = mensaje;
+  selectionStatus.classList.add("is-error");
+
+  if (input === nombreAsesorInput) {
+    advisorLookupStatus.textContent = mensaje;
+    advisorLookupStatus.classList.add("is-error");
+    input.focus();
+    return;
+  }
+
+  if (input === searchInput) {
+    input.setCustomValidity(mensaje);
+  }
+
+  input.focus();
+  if (!input.readOnly) {
+    input.reportValidity();
+  }
+}
+
+function obtenerFechaExcel(fecha = new Date()) {
+  const dia = String(fecha.getDate()).padStart(2, "0");
+  const mes = String(fecha.getMonth() + 1).padStart(2, "0");
+  const anio = fecha.getFullYear();
+  return `${dia}/${mes}/${anio}`;
+}
+
+function textoOpcionSeleccionada(select) {
+  return select.selectedOptions[0]?.textContent.trim() || "";
+}
+
+function construirFilaExcel() {
+  const esGarantia = conceptoEsGarantia();
+  const precio = String(selectedProduct.productPrice).trim().replace(/[$,\s]/g, "");
+  const columnas = [
+    cacInputs.region.value,
+    cacSelect.value,
+    cacInputs.nombre.value,
+    analistaEqInput.value,
+    obtenerFechaExcel(),
+    conceptoSelect.value,
+    numeroEmpleadoInput.value,
+    gacInput.value,
+    facturaInput.value,
+    codigoQRInput.value,
+    folioInput.value,
+    cacInputs.almacen.value,
+    micaSelect.value,
+    textoOpcionSeleccionada(micaSelect),
+    esGarantia ? micaEntregadaSelect.value : "N/A",
+    esGarantia ? textoOpcionSeleccionada(micaEntregadaSelect) : "N/A",
+    esGarantia ? garantiaSelect.value : "N/A",
+    esGarantia ? (micaSelect.value === micaEntregadaSelect.value ? "NO" : "SI") : "N/A",
+    detailInputs.brand.value,
+    detailInputs.identifier.value,
+    detailInputs.model.value,
+    String(Number(precio)),
+    imeiInput.value,
+    operadorSelect.value
+  ];
+
+  return columnas
+    .map((valor) => String(valor ?? "").replace(/[\t\r\n]/g, " ").trim())
+    .join("\t");
+}
+
+async function copiarDatosExcel() {
+  const error = primerErrorDeCopia();
+
+  if (error) {
+    mostrarErrorDeCopia(error);
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(construirFilaExcel());
+    selectionStatus.textContent = "Datos copiados. Puedes pegarlos en Excel.";
+    selectionStatus.classList.remove("is-error");
+  } catch {
+    selectionStatus.textContent = "No fue posible acceder al portapapeles.";
+    selectionStatus.classList.add("is-error");
+  }
 }
 
 function actualizarSugerenciaActiva() {
@@ -552,6 +840,8 @@ async function ejecutarBusqueda() {
 }
 
 searchInput.addEventListener("input", () => {
+  searchInput.setCustomValidity("");
+  limpiarProductoSeleccionado();
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(ejecutarBusqueda, 300);
 });
@@ -588,6 +878,7 @@ cacSelect.addEventListener("change", () => {
   } else {
     localStorage.removeItem(CAC_STORAGE_KEY);
   }
+  programarConsultaAsesor();
   cacSelectWrapper.classList.remove("is-open");
 });
 
@@ -617,6 +908,7 @@ document.addEventListener("click", (event) => {
 
 equipmentForm.addEventListener("reset", () => {
   setTimeout(() => {
+    limpiarProductoSeleccionado();
     displayedProducts = [];
     searchRequestId += 1;
     clearTimeout(debounceTimer);
@@ -628,5 +920,7 @@ equipmentForm.addEventListener("reset", () => {
     actualizarValidacionIMEI();
   });
 });
+
+copyDataButton.addEventListener("click", copiarDatosExcel);
 
 iniciarDatosCAC();
