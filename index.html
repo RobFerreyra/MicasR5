@@ -13,7 +13,6 @@
       <div class="form-header">
         <p class="eyebrow">Micas R5</p>
         <!-- <h1 id="page-title">Captura de equipo</h1> -->
-        <!-- <p class="intro">Busca un equipo Telcel y revisa sus datos antes de continuar.</p> -->
       </div>
       <form id="datos-cac" class="datos-cac" novalidate>
         <fieldset class="details-fieldset">
@@ -21,11 +20,13 @@
           <div class="cac-fields">
             <div class="field-group">
               <label for="cac">CAC</label>
-              <div class="select-wrapper">
-                <select id="cac" name="cac" required>
+              <div class="select-wrapper cac-select-wrapper">
+                <select id="cac" name="cac" aria-describedby="cac-count-status cac-status" required>
                   <option value="">CAC</option>
                 </select>
                 <span class="select-chevron" aria-hidden="true"></span>
+                <span id="cac-count-status" class="field-tooltip cac-count-tooltip" role="status" aria-live="polite"></span>
+                <span id="cac-status" class="field-tooltip cac-status-tooltip" role="status" aria-live="polite"></span>
               </div>
             </div>
             <div class="field-group">
@@ -33,7 +34,6 @@
               <input id="nombreCAC" type="text" name="nombreCAC" placeholder=" " readonly>
             </div>
           </div>
-          <p id="cac-status" class="search-status" role="status" aria-live="polite"></p>
           <div class="hidden">        
             <label for="almacen">Almacen</label>
             <input id="almacen" type="text" name="almacen" readonly>
@@ -58,7 +58,8 @@
             </div>
             <div class="field-group">
               <label for="analistaEq">Analista Eq</label>
-              <input id="analistaEq" name="analistaEq" type="text" inputmode="numeric" maxlength="5" pattern="[0-9]{1,5}" placeholder=" " required>
+              <input id="analistaEq" name="analistaEq" type="text" inputmode="numeric" maxlength="5" pattern="[0-9]{1,5}" aria-describedby="analista-eq-status" aria-invalid="false" placeholder=" " required>
+              <span id="analista-eq-status" class="field-tooltip" role="status" aria-live="polite"></span>
             </div>
           </div>
         </fieldset>
@@ -72,8 +73,8 @@
               <div class="field-group">
                 <label for="imei">IMEI</label>
                 <input id="imei" name="imei" type="text" inputmode="numeric" maxlength="15" placeholder=" " aria-describedby="imei-status" aria-invalid="false" required>
+                <span id="imei-status" class="field-tooltip" role="status" aria-live="polite"></span>
               </div>
-              <p id="imei-status" class="search-status" role="status" aria-live="polite"></p>
             </div>
             <div class="field-group operator-field">
               <label for="operador">Operador</label>
@@ -109,19 +110,23 @@
           <div class="details-grid">
             <div class="field-group">
               <label for="brand">Marca</label>
-                <input id="brand" name="brand" type="text" placeholder=" " readonly>
+                <input id="brand" name="brand" type="text" placeholder=" ">
+                <span class="field-tooltip" role="tooltip">Puedes buscar el equipo para llenar este dato.</span>
             </div>
             <div class="field-group">
               <label for="model">Modelo</label>
-              <input id="model" name="model" type="text" placeholder=" " readonly>
+              <input id="model" name="model" type="text" placeholder=" ">
+              <span class="field-tooltip" role="tooltip">Puedes buscar el equipo para llenar este dato.</span>
             </div>
             <div class="field-group">
               <label for="identifier">Material</label>
-              <input id="identifier" name="identifier" type="text" placeholder=" " readonly>
+              <input id="identifier" name="identifier" type="text" placeholder=" ">
+              <span class="field-tooltip" role="tooltip">Puedes buscar el equipo para llenar este dato.</span>
             </div>
             <div class="field-group">
               <label for="productPrice">Precio</label>
-              <input id="productPrice" name="productPrice" type="text" placeholder=" " readonly>
+              <input id="productPrice" name="productPrice" type="text" placeholder=" ">
+              <span class="field-tooltip" role="tooltip">Puedes buscar el equipo para llenar este dato.</span>
             </div>
           </div>
         </fieldset>
@@ -147,13 +152,13 @@
             </div>
             <div class="field-group">
               <label for="folio">Folio</label>
-              <input id="folio" name="folio" type="text" placeholder=" " required>
+              <input id="folio" name="folio" type="text" minlength="13" maxlength="13" placeholder=" " required>
             </div>
           </div>
           <div class="mica-fields mica-second-row">
             <div class="field-group">
               <label for="factura">Factura</label>
-              <input id="factura" name="factura" type="text" inputmode="numeric" pattern="[0-9]+" placeholder=" " required>
+              <input id="factura" name="factura" type="text" inputmode="numeric" minlength="10" maxlength="10" pattern="8[0-9]{9}" placeholder=" " required>
             </div>
             <div class="field-group">
               <label for="mica">Mica</label>
@@ -173,13 +178,13 @@
             </div>
             <div class="field-group">
               <label for="codigoQR">Código QR</label>
-              <input id="codigoQR" name="codigoQR" type="text" placeholder=" " required>
+              <input id="codigoQR" name="codigoQR" type="text" minlength="16" maxlength="16" placeholder=" " required>
             </div>
           </div>
         </fieldset>
 
         <div class="form-footer">
-          <p id="selection-status" class="selection-status" role="status" aria-live="polite">Selecciona un equipo para completar sus datos.</p>
+          <p id="selection-status" class="selection-status" role="status" aria-live="polite">Completa datos del formulario.</p>
           <button id="copy-data-button" type="button" class="reset-button">Copiar Datos</button>
         </div>
       </form>

@@ -74,39 +74,58 @@ async function cargarDatosCAC() {
   };
 }
 
-async function buscarAsesor(cac, numeroEmpleado) {
+async function cargarAsesores(cac) {
   const respuesta = await fetch(ASESOR_URL, {
     method: "POST",
     headers: CAC_HEADERS,
-    body: JSON.stringify({
-      tabla: `Tabla${cac}`,
-      numero: String(numeroEmpleado)
-    })
+    body: JSON.stringify({ tabla: `Tabla${cac}` })
   });
 
   if (!respuesta.ok) {
-    throw new Error(`No fue posible validar al asesor (${respuesta.status}).`);
+    throw new Error(`No fue posible cargar los asesores (${respuesta.status}).`);
   }
 
   const datos = await respuesta.json();
   const codigoRespuesta = Number(datos?.statusCode);
 
   if (datos?.statusCode !== undefined && (codigoRespuesta < 200 || codigoRespuesta >= 300)) {
-    throw new Error(`El flujo no pudo validar al asesor (${datos.statusCode}).`);
+    throw new Error(`El flujo no pudo cargar los asesores (${datos.statusCode}).`);
   }
 
-  const cuerpo = datos?.body ?? datos;
-  const registro = Array.isArray(cuerpo) ? cuerpo[0] : cuerpo;
-
-  if (Array.isArray(cuerpo) && cuerpo.length === 0) {
-    return "";
+  let cuerpo = datos?.body ?? datos;
+  if (typeof cuerpo === "string") {
+    try {
+      cuerpo = JSON.parse(cuerpo);
+    } catch {
+      throw new Error("La respuesta de validación de asesores no contiene JSON válido.");
+    }
   }
 
-  if (!registro || typeof registro !== "object" || Array.isArray(registro)) {
-    throw new Error("La respuesta de validación del asesor no tiene un formato válido.");
+  while (cuerpo && typeof cuerpo === "object" && !Array.isArray(cuerpo) && !("Numero" in cuerpo)) {
+    if (cuerpo.data !== undefined) {
+      cuerpo = cuerpo.data;
+    } else if (cuerpo.value !== undefined) {
+      cuerpo = cuerpo.value;
+    } else {
+      break;
+    }
   }
 
-  return String(registro.Nombre ?? "").trim();
+  const registros = Array.isArray(cuerpo) ? cuerpo : [cuerpo];
+  if (!Array.isArray(cuerpo) && (!cuerpo || typeof cuerpo !== "object" || !("Numero" in cuerpo))) {
+    throw new Error("La respuesta de validación de asesores no tiene un formato válido.");
+  }
+
+  return registros.map((registro) => {
+    if (!registro || typeof registro !== "object" || Array.isArray(registro) || !("Numero" in registro)) {
+      throw new Error("La respuesta de validación de asesores no tiene un formato válido.");
+    }
+
+    return {
+      numero: String(registro.Numero ?? "").trim(),
+      nombre: String(registro.Nombre ?? "").trim()
+    };
+  });
 }
 
 function extraerRegistrosCAC(datos) {
@@ -227,12 +246,14 @@ const gacStatus = document.querySelector("#gac-status");
 const nombreAsesorInput = document.querySelector("#nombreAsesor");
 const advisorLookupStatus = document.querySelector("#advisor-lookup-status");
 const analistaEqInput = document.querySelector("#analistaEq");
+const analistaEqStatus = document.querySelector("#analista-eq-status");
 const facturaInput = document.querySelector("#factura");
 const codigoQRInput = document.querySelector("#codigoQR");
 const operadorSelect = document.querySelector("#operador");
 const cacSelect = document.querySelector("#cac");
 const cacSelectWrapper = cacSelect.closest(".select-wrapper");
 const cacStatus = document.querySelector("#cac-status");
+const cacCountStatus = document.querySelector("#cac-count-status");
 const conceptoSelect = document.querySelector("#concepto");
 const garantiaSelect = document.querySelector("#garantia");
 const folioInput = document.querySelector("#folio");
@@ -257,6 +278,8 @@ let searchRequestId = 0;
 let debounceTimer;
 let advisorLookupTimer;
 let advisorLookupRequestId = 0;
+const advisorRecordsCache = new Map();
+const advisorRequests = new Map();
 let selectedProduct = null;
 let cacRecords = [];
 let garantiasCatalogo = [];
@@ -297,50 +320,122 @@ function sincronizarNumeroEmpleadoDesdeGAC() {
   programarConsultaAsesor();
 }
 
-function programarConsultaAsesor() {
+function obtenerAsesores(cac) {
+  if (advisorRecordsCache.has(cac)) {
+    return Promise.resolve(advisorRecordsCache.get(cac));
+  }
+
+  if (!advisorRequests.has(cac)) {
+    const request = cargarAsesores(cac)
+      .then((registros) => {
+        advisorRecordsCache.set(cac, registros);
+        return registros;
+      })
+      .finally(() => advisorRequests.delete(cac));
+    advisorRequests.set(cac, request);
+  }
+
+  return advisorRequests.get(cac);
+}
+
+function validarAnalistaEq(registros = advisorRecordsCache.get(cacSelect.value.trim())) {
+  const analista = analistaEqInput.value.trim();
+  let mensaje = "";
+
+  if (analista && !/^\d{1,5}$/.test(analista)) {
+    mensaje = "El número de analista debe contener solo números y hasta 5 dígitos.";
+  } else if (analista && Number(analista) > MAXIMUM_EMPLOYEE_NUMBER) {
+    mensaje = "El número de analista no puede ser mayor que 65535.";
+  } else if (analista && cacSelect.value.trim() && !registros) {
+    mensaje = "Espera a que termine la validación del analista.";
+  } else if (analista && registros && !registros.some((registro) => registro.numero === analista)) {
+    mensaje = "No se encontró el número de analista en los registros de este CAC.";
+  }
+
+  analistaEqInput.setCustomValidity(mensaje);
+  analistaEqInput.setAttribute("aria-invalid", String(Boolean(mensaje && !mensaje.startsWith("Espera"))));
+  analistaEqStatus.textContent = mensaje;
+  analistaEqStatus.classList.toggle("is-error", Boolean(mensaje && !mensaje.startsWith("Espera")));
+  analistaEqStatus.classList.toggle("is-pending", Boolean(mensaje.startsWith("Espera")));
+}
+
+function programarConsultaAsesor(actualizarNombre = true) {
   clearTimeout(advisorLookupTimer);
   const requestId = ++advisorLookupRequestId;
   const cac = cacSelect.value.trim();
   const numeroEmpleado = numeroEmpleadoInput.value.trim();
   const numeroValido = /^\d{1,5}$/.test(numeroEmpleado)
     && Number(numeroEmpleado) <= MAXIMUM_EMPLOYEE_NUMBER;
+  const analista = analistaEqInput.value.trim();
+  const analistaValido = /^\d{1,5}$/.test(analista)
+    && Number(analista) <= MAXIMUM_EMPLOYEE_NUMBER;
 
-  nombreAsesorInput.value = "";
-  nombreAsesorInput.setCustomValidity("");
-  advisorLookupStatus.textContent = "";
-  advisorLookupStatus.classList.remove("is-error");
+  if (actualizarNombre) {
+    nombreAsesorInput.value = "";
+    nombreAsesorInput.setCustomValidity("");
+    advisorLookupStatus.textContent = "";
+    advisorLookupStatus.classList.remove("is-error", "is-visible");
+  }
 
-  if (!cac || !numeroValido) {
+  validarAnalistaEq();
+
+  if (!cac || (!numeroValido && !analistaValido)) {
     return;
   }
 
-  advisorLookupStatus.textContent = "Validando asesor...";
+  if (numeroValido && actualizarNombre) {
+    advisorLookupStatus.textContent = "Validando asesor...";
+  }
+
+  if (analistaValido && !advisorRecordsCache.has(cac)) {
+    validarAnalistaEq();
+  }
+
   advisorLookupTimer = setTimeout(async () => {
     try {
-      const nombre = await buscarAsesor(cac, numeroEmpleado);
+      const registros = await obtenerAsesores(cac);
 
       if (requestId !== advisorLookupRequestId) {
         return;
       }
 
-      if (!nombre) {
-        advisorLookupStatus.textContent = "No se encontró un asesor para este CAC y número.";
-        return;
-      }
+      validarAnalistaEq(registros);
+      if (numeroValido) {
+        const registro = registros.find((item) => item.numero === numeroEmpleado);
+        if (!registro?.nombre) {
+          nombreAsesorInput.value = "";
+          advisorLookupStatus.textContent = "No se encontró un asesor para este CAC y número.";
+          advisorLookupStatus.classList.add("is-error", "is-visible");
+          return;
+        }
 
-      nombreAsesorInput.value = nombre;
-      advisorLookupStatus.textContent = "Asesor validado.";
+        nombreAsesorInput.value = registro.nombre;
+        advisorLookupStatus.textContent = "Asesor validado.";
+        advisorLookupStatus.classList.remove("is-error", "is-visible");
+      }
     } catch (error) {
       if (requestId !== advisorLookupRequestId) {
         return;
       }
 
-      nombreAsesorInput.value = "";
-      advisorLookupStatus.textContent = error.message || "No fue posible validar al asesor.";
-      advisorLookupStatus.classList.add("is-error");
+      if (numeroValido && !nombreAsesorInput.value) {
+        nombreAsesorInput.value = "";
+        advisorLookupStatus.textContent = error.message || "No fue posible validar al asesor.";
+        advisorLookupStatus.classList.add("is-error");
+      }
+      if (analistaValido) {
+        analistaEqInput.setCustomValidity(error.message || "No fue posible validar al analista.");
+        analistaEqInput.setAttribute("aria-invalid", "true");
+        analistaEqStatus.textContent = error.message || "No fue posible validar al analista.";
+        analistaEqStatus.classList.add("is-error");
+      }
     }
   }, 300);
 }
+
+analistaEqInput.addEventListener("input", () => {
+  programarConsultaAsesor(false);
+});
 
 function actualizarValidacionIdentificadores() {
   const numeroEmpleado = numeroEmpleadoInput.value.trim();
@@ -362,9 +457,9 @@ function actualizarValidacionIdentificadores() {
   numeroEmpleadoInput.setAttribute("aria-invalid", String(Boolean(mensajeNumero)));
   gacInput.setCustomValidity(mensajeGAC);
   gacInput.setAttribute("aria-invalid", String(Boolean(mensajeGAC)));
-  numeroEmpleadoStatus.textContent = mensajeNumero || (numeroEmpleado ? "Número de empleado válido." : "");
+  numeroEmpleadoStatus.textContent = mensajeNumero;
   numeroEmpleadoStatus.classList.toggle("is-error", Boolean(mensajeNumero));
-  gacStatus.textContent = mensajeGAC || (gac ? "GAC válido." : "");
+  gacStatus.textContent = mensajeGAC;
   gacStatus.classList.toggle("is-error", Boolean(mensajeGAC));
 }
 
@@ -372,6 +467,8 @@ numeroEmpleadoInput.addEventListener("input", sincronizarGACDesdeNumeroEmpleado)
 gacInput.addEventListener("input", sincronizarNumeroEmpleadoDesdeGAC);
 numeroEmpleadoInput.addEventListener("blur", actualizarValidacionIdentificadores);
 gacInput.addEventListener("blur", actualizarValidacionIdentificadores);
+facturaInput.addEventListener("input", actualizarValidacionFactura);
+codigoQRInput.addEventListener("input", actualizarValidacionCodigoQR);
 
 function validarDigitoIMEI(valor) {
   let suma = 0;
@@ -413,14 +510,53 @@ function actualizarValidacionIMEI(mostrarIncompleto = false) {
 
   imeiInput.setCustomValidity(mensaje);
   imeiInput.setAttribute("aria-invalid", String(Boolean(mensaje)));
-  imeiStatus.textContent = textoEstado;
-  imeiStatus.classList.toggle("is-error", Boolean(mensaje && mostrarMensaje));
+  mostrarEstadoIMEI(textoEstado, Boolean(mensaje && mostrarMensaje));
 
   return mensaje === "";
 }
 
+function mostrarEstadoIMEI(mensaje, esError = false) {
+  imeiStatus.textContent = mensaje;
+  imeiStatus.classList.toggle("is-error", esError);
+}
+
+function actualizarValidacionFactura() {
+  const factura = facturaInput.value.trim();
+  facturaInput.setCustomValidity(
+    factura && !/^8\d{9}$/.test(factura)
+      ? "La factura debe tener 10 dígitos y comenzar con 8."
+      : ""
+  );
+}
+
+function actualizarValidacionCodigoQR() {
+  const codigoQR = codigoQRInput.value;
+  codigoQRInput.setCustomValidity(
+    codigoQR && codigoQR.length !== 16
+      ? "El código QR debe tener exactamente 16 caracteres."
+      : ""
+  );
+}
+
+function actualizarValidacionFolio() {
+  const folio = folioInput.value;
+  folioInput.setCustomValidity(
+    folio && folio.length !== 13
+      ? "El folio debe tener exactamente 13 caracteres."
+      : ""
+  );
+}
+
 imeiInput.addEventListener("input", () => actualizarValidacionIMEI());
 imeiInput.addEventListener("blur", () => actualizarValidacionIMEI(true));
+folioInput.addEventListener("input", actualizarValidacionFolio);
+for (const input of [detailInputs.brand, detailInputs.model]) {
+  input.addEventListener("input", () => {
+    const cursorPosition = input.selectionStart;
+    input.value = input.value.toLocaleUpperCase("es-MX");
+    input.setSelectionRange(cursorPosition, cursorPosition);
+  });
+}
 
 function conceptoEsGarantia() {
   const concepto = conceptoSelect.selectedOptions[0]?.textContent
@@ -477,6 +613,10 @@ function mostrarEstadoCAC(mensaje, esError = false) {
 
   cacStatus.textContent = mensaje;
   cacStatus.classList.toggle("is-error", esError);
+}
+
+function mostrarConteoCAC(mensaje) {
+  cacCountStatus.textContent = mensaje;
 }
 
 function mostrarDatosCAC(registro) {
@@ -545,10 +685,12 @@ async function iniciarDatosCAC() {
     poblarSelectorCatalogo(micaSelect, datos.catalogos.Micas, "MaterialMica", "NomMica");
     poblarSelectorCatalogo(micaEntregadaSelect, datos.catalogos.Micas, "MaterialMica", "NomMica");
     restaurarCACGuardado();
-    mostrarEstadoCAC(`${cacRecords.length} CAC disponibles.`);
+    mostrarConteoCAC(`${cacRecords.length} CAC disponibles.`);
+    mostrarEstadoCAC("");
   } catch (error) {
     cacRecords = [];
     cacSelect.replaceChildren(new Option("No disponible", ""));
+    mostrarConteoCAC("");
     mostrarEstadoCAC(error.message || "No fue posible cargar los CAC.", true);
   }
 }
@@ -616,17 +758,14 @@ function seleccionarProducto(index) {
 
   selectedProduct = producto;
   searchInput.setCustomValidity("");
-  detailInputs.brand.value = producto.brand;
-  detailInputs.model.value = producto.model;
+  detailInputs.brand.value = producto.brand.toLocaleUpperCase("es-MX");
+  detailInputs.model.value = producto.model.toLocaleUpperCase("es-MX");
   detailInputs.identifier.value = producto.identifier;
-  detailInputs.productPrice.value = producto.productPrice === "" ? "" : `$${producto.productPrice}`;
-  if (selectionStatus) {
-    selectionStatus.textContent = `Equipo seleccionado: ${producto.displayName}`;
-    selectionStatus.classList.remove("is-error");
-  }
+  const precio = String(producto.productPrice ?? "").trim();
+  detailInputs.productPrice.value = precio && !precio.startsWith("$") ? `$${precio}` : precio;
   searchInput.value = producto.displayName;
   ocultarSugerencias();
-  mostrarEstado("");
+  mostrarEstado(`Equipo seleccionado: ${producto.displayName}`);
 }
 
 function limpiarProductoSeleccionado() {
@@ -634,15 +773,42 @@ function limpiarProductoSeleccionado() {
   Object.values(detailInputs).forEach((input) => {
     input.value = "";
   });
-  if (selectionStatus) {
-    selectionStatus.textContent = "Selecciona un equipo para completar sus datos.";
-    selectionStatus.classList.remove("is-error");
+}
+
+function validarDatosProducto() {
+  detailInputs.brand.value = detailInputs.brand.value.trim().toLocaleUpperCase("es-MX");
+  detailInputs.model.value = detailInputs.model.value.trim().toLocaleUpperCase("es-MX");
+  detailInputs.identifier.value = detailInputs.identifier.value.trim();
+  if (detailInputs.identifier.value.toLocaleUpperCase("es-MX") === "N/A") {
+    detailInputs.identifier.value = "N/A";
+  }
+
+  const identificadorValido = /^7\d{6}$/.test(detailInputs.identifier.value)
+    || detailInputs.identifier.value.toLocaleUpperCase("es-MX") === "N/A";
+  detailInputs.identifier.setCustomValidity(
+    identificadorValido
+      ? ""
+      : "El material debe tener 7 dígitos y comenzar con 7, o ser N/A."
+  );
+
+  const precioTexto = detailInputs.productPrice.value.trim();
+  const precio = Number(precioTexto.replace(/[$,\s]/g, ""));
+  const precioValido = precioTexto !== "" && Number.isFinite(precio) && precio > 0;
+  detailInputs.productPrice.setCustomValidity(
+    precioValido ? "" : "El precio debe ser un valor numérico mayor que 0."
+  );
+  if (precioValido && !precioTexto.startsWith("$")) {
+    detailInputs.productPrice.value = `$${precioTexto}`;
   }
 }
 
 function primerErrorDeCopia() {
   actualizarValidacionIdentificadores();
   actualizarValidacionIMEI(true);
+  actualizarValidacionFactura();
+  actualizarValidacionCodigoQR();
+  actualizarValidacionFolio();
+  validarDatosProducto();
 
   const camposRequeridos = [
     [cacSelect, "Selecciona un CAC."],
@@ -656,9 +822,9 @@ function primerErrorDeCopia() {
     [imeiInput, "Ingresa un IMEI válido."],
     [operadorSelect, "Selecciona un operador."],
     [conceptoSelect, "Selecciona un concepto."],
-    [facturaInput, "Ingresa una factura numérica."],
-    [codigoQRInput, "Ingresa el código QR."],
-    [folioInput, "Ingresa el folio."],
+    [facturaInput, "Ingresa una factura de 10 dígitos que comience con 8."],
+    [codigoQRInput, "Ingresa un código QR de exactamente 16 caracteres."],
+    [folioInput, "Ingresa un folio de exactamente 13 caracteres."],
     [micaSelect, "Selecciona una mica."]
   ];
 
@@ -676,15 +842,19 @@ function primerErrorDeCopia() {
     return { input: searchInput, mensaje: "Selecciona un equipo de los resultados." };
   }
 
-  for (const input of [detailInputs.brand, detailInputs.identifier, detailInputs.model]) {
+  for (const [input, mensaje] of [
+    [detailInputs.brand, "Ingresa la marca del equipo."],
+    [detailInputs.model, "Ingresa el modelo del equipo."],
+    [detailInputs.identifier, "Ingresa un material válido: 7 dígitos que comiencen con 7 o N/A."],
+    [detailInputs.productPrice, "Ingresa un precio numérico mayor que 0."]
+  ]) {
     if (!input.value.trim()) {
-      return { input, mensaje: "El equipo seleccionado no contiene todos sus datos." };
+      return { input, mensaje };
     }
-  }
 
-  const precio = String(selectedProduct.productPrice ?? "").trim().replace(/[$,\s]/g, "");
-  if (!precio || !Number.isFinite(Number(precio))) {
-    return { input: detailInputs.productPrice, mensaje: "El precio del equipo no es numérico." };
+    if (!input.validity.valid) {
+      return { input, mensaje: input.validationMessage || mensaje };
+    }
   }
 
   if (conceptoEsGarantia()) {
@@ -701,14 +871,23 @@ function primerErrorDeCopia() {
 
 function mostrarErrorDeCopia(error) {
   const { input, mensaje } = error;
-  selectionStatus.textContent = mensaje;
-  selectionStatus.classList.add("is-error");
 
   if (input === nombreAsesorInput) {
+    selectionStatus.textContent = mensaje;
+    selectionStatus.classList.add("is-error");
     advisorLookupStatus.textContent = mensaje;
     advisorLookupStatus.classList.add("is-error");
     input.focus();
     return;
+  }
+
+  if (input === imeiInput) {
+    mostrarEstadoIMEI(mensaje, true);
+  } else if (input === searchInput) {
+    mostrarEstado(mensaje, true);
+  } else {
+    selectionStatus.textContent = mensaje;
+    selectionStatus.classList.add("is-error");
   }
 
   if (input === searchInput) {
@@ -734,7 +913,7 @@ function textoOpcionSeleccionada(select) {
 
 function construirFilaExcel() {
   const esGarantia = conceptoEsGarantia();
-  const precio = String(selectedProduct.productPrice).trim().replace(/[$,\s]/g, "");
+  const precio = detailInputs.productPrice.value.trim().replace(/[$,\s]/g, "");
   const columnas = [
     cacInputs.region.value,
     cacSelect.value,
@@ -842,6 +1021,7 @@ async function ejecutarBusqueda() {
 searchInput.addEventListener("input", () => {
   searchInput.setCustomValidity("");
   limpiarProductoSeleccionado();
+  mostrarEstado("");
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(ejecutarBusqueda, 300);
 });
@@ -914,9 +1094,6 @@ equipmentForm.addEventListener("reset", () => {
     clearTimeout(debounceTimer);
     ocultarSugerencias();
     mostrarEstado("");
-    if (selectionStatus) {
-      selectionStatus.textContent = "Selecciona un equipo para completar sus datos.";
-    }
     actualizarValidacionIMEI();
   });
 });
