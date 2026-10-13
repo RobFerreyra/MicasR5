@@ -121,8 +121,11 @@ legend { padding: 0 18px 0 0; font-family: 'Space Grotesk', sans-serif; font-siz
 .field-group label { position: absolute; z-index: 1; top: 50%; left: 16px; margin: 0; overflow: hidden; color: var(--muted); font-size: 0.82rem; font-weight: 500; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transform: translateY(-50%); transition: opacity 160ms ease; }
 .field-group:has(> input:focus) > label,
 .field-group:has(> input:not(:placeholder-shown)) > label,
-.field-group:has(select:focus) > label,
-.field-group:has(select option:checked:not([value=""])) > label { opacity: 0; }
+.field-group:has(select:focus):not(.mica-label-field.is-label-visible) > label,
+.field-group:has(select option:checked:not([value=""])):not(.mica-label-field.is-label-visible) > label { opacity: 0; }
+.mica-label-field > label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.mica-label-field.is-label-visible > label { position: static; display: block; width: auto; height: auto; margin: 0 0 6px; overflow: visible; color: var(--ink); font-weight: 700; pointer-events: none; text-overflow: clip; white-space: normal; transform: none; clip: auto; clip-path: none; opacity: 1; }
+.mica-second-row #codigoQR-field.is-aligned-with-mica-label { margin-top: calc(1em + 7px); }
 .form-footer { display: flex; align-items: center; justify-content: space-around; gap: 20px; margin-top: 32px; }
 .selection-status { margin: 0; color: var(--deep-blue); font-size: 0.82rem; }
 .selection-status.is-error { color: #b54835; }
@@ -144,8 +147,8 @@ legend { padding: 0 18px 0 0; font-family: 'Space Grotesk', sans-serif; font-siz
 
 @media (min-width: 720px) {
   .advisor-fields { grid-template-columns: minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 2fr) minmax(0, 0.8fr); }
-  .mica-first-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .mica-second-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .mica-first-row { grid-template-columns: minmax(13rem, 0.6fr) 1fr minmax(11rem, 0.55fr) minmax(8rem, 0.5fr); }
+  .mica-second-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .equipment-search-grid { grid-template-columns: minmax(0, 1fr) 9rem minmax(0, 1.75fr); }
   .equipment-search-grid > .imei-field,
   .equipment-search-grid > .operator-field { margin-top: calc(1rem + 4px); }
@@ -154,7 +157,7 @@ legend { padding: 0 18px 0 0; font-family: 'Space Grotesk', sans-serif; font-siz
 
 @media (min-width: 1200px) {
   .equipment-search-grid { grid-template-columns: minmax(0, 1fr) 9rem minmax(0, 2fr); }
-  .mica-second-row { grid-template-columns: minmax(8rem, 0.7fr) repeat(3, minmax(0, 1fr)); }
+  /* .mica-second-row { grid-template-columns: minmax(8rem, 0.7fr) repeat(3, minmax(0, 1fr)); } */
 }
 
 @media (min-width: 481px) and (max-width: 719px) {

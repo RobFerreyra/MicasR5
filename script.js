@@ -258,8 +258,10 @@ const conceptoSelect = document.querySelector("#concepto");
 const garantiaSelect = document.querySelector("#garantia");
 const folioInput = document.querySelector("#folio");
 const micaSelect = document.querySelector("#mica");
+const micaLabelFields = document.querySelectorAll(".mica-label-field");
 const micaEntregadaField = document.querySelector("#mica-entregada-field");
 const micaEntregadaSelect = document.querySelector("#mica-entregada");
+const codigoQRField = document.querySelector("#codigoQR-field");
 const cacInputs = {
   nombre: document.querySelector("#nombreCAC"),
   almacen: document.querySelector("#almacen"),
@@ -571,6 +573,10 @@ function conceptoEsGarantia() {
 function actualizarCamposPorConcepto() {
   const esGarantia = conceptoEsGarantia();
 
+  micaLabelFields.forEach((field) => {
+    field.classList.toggle("is-label-visible", esGarantia);
+  });
+  codigoQRField.classList.toggle("is-aligned-with-mica-label", esGarantia);
   micaEntregadaField.hidden = !esGarantia;
 
   if (esGarantia) {

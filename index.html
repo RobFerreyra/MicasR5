@@ -154,21 +154,21 @@
               <label for="folio">Folio</label>
               <input id="folio" name="folio" type="text" minlength="13" maxlength="13" placeholder=" " required>
             </div>
-          </div>
-          <div class="mica-fields mica-second-row">
             <div class="field-group">
               <label for="factura">Factura</label>
               <input id="factura" name="factura" type="text" inputmode="numeric" minlength="10" maxlength="10" pattern="8[0-9]{9}" placeholder=" " required>
             </div>
-            <div class="field-group">
-              <label for="mica">Mica</label>
+          </div>
+          <div class="mica-fields mica-second-row">
+            <div class="field-group mica-label-field">
+              <label for="mica">Mica Vendida</label>
               <div class="select-wrapper">
                 <select id="mica" name="mica" required>
                 </select>
                 <span class="select-chevron" aria-hidden="true"></span>
               </div>
             </div>
-            <div class="field-group" id="mica-entregada-field" hidden>
+            <div class="field-group mica-label-field" id="mica-entregada-field" hidden>
               <label for="mica-entregada">Mica Entregada</label>
               <div class="select-wrapper">
                 <select id="mica-entregada" name="micaEntregada" required>
@@ -176,7 +176,7 @@
                 <span class="select-chevron" aria-hidden="true"></span>
               </div>
             </div>
-            <div class="field-group">
+            <div class="field-group" id="codigoQR-field">
               <label for="codigoQR">Código QR</label>
               <input id="codigoQR" name="codigoQR" type="text" minlength="16" maxlength="16" placeholder=" " required>
             </div>
