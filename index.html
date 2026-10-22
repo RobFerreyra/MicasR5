@@ -72,9 +72,10 @@
             <div class="imei-field">
               <div class="field-group">
                 <label for="imei">IMEI</label>
-                <input id="imei" name="imei" type="text" inputmode="numeric" maxlength="15" placeholder=" " aria-describedby="imei-status" aria-invalid="false" required>
+                <input id="imei" name="imei" type="text" inputmode="numeric" maxlength="15" placeholder=" " aria-describedby="imei-status imei-lookup-status" aria-invalid="false" required>
                 <span id="imei-status" class="field-tooltip" role="status" aria-live="polite"></span>
               </div>
+              <div id="imei-lookup-status" class="search-status" role="status" aria-live="polite"></div>
             </div>
             <div class="field-group operator-field">
               <label for="operador">Operador</label>

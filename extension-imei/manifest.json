@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Micas IMEI",
+  "version": "1.0.2",
+  "description": "Consulta Clave Material de un IMEI en la intranet Telcel.",
+  "permissions": [],
+  "host_permissions": [
+    "http://intranet.telcel.com:8030/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "file:///*",
+        "http://localhost/*",
+        "https://robferreyra.github.io/MicasR5/*"
+      ],
+      "js": [
+        "content-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

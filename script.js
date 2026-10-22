@@ -16,20 +16,14 @@ const MINIMUM_SEARCH_LENGTH = 2;
 const CAC_STORAGE_KEY = "micas-cac-seleccionado";
 const FALLBACK_IMAGE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='42' height='48' viewBox='0 0 42 48'%3E%3Crect width='42' height='48' rx='5' fill='%23eef3ef'/%3E%3Cpath d='M13 35h16M16 13h10v22H16z' fill='none' stroke='%232d765d' stroke-width='2'/%3E%3C/svg%3E";
 
-async function buscarEquipo(terminoBusqueda) {
-  const termino = terminoBusqueda.trim();
-
-  if (termino.length < MINIMUM_SEARCH_LENGTH) {
-    return [];
-  }
-
+async function consultarProductosAlgolia(params, limite = 5) {
   const respuesta = await fetch(ALGOLIA_URL, {
     method: "POST",
     headers: ALGOLIA_HEADERS,
     body: JSON.stringify({
       requests: [{
         indexName: "prod_telcel_tienda",
-        params: `query=${encodeURIComponent(termino)}&hitsPerPage=5`
+        params
       }]
     })
   });
@@ -45,7 +39,35 @@ async function buscarEquipo(terminoBusqueda) {
     throw new Error("La respuesta de búsqueda no tiene un formato válido.");
   }
 
-  return hits.slice(0, 5).map(normalizarProducto);
+  return hits.slice(0, limite).map(normalizarProducto);
+}
+
+async function buscarEquipo(terminoBusqueda, tipoBusqueda = "texto") {
+  const termino = terminoBusqueda.trim();
+
+  if (tipoBusqueda === "sku") {
+    if (!/^7\d{6,7}$/.test(termino)) {
+      throw new Error("La Clave Material para la búsqueda no es válida.");
+    }
+
+    const productos = await consultarProductosAlgolia(
+      `query=${encodeURIComponent(termino)}&hitsPerPage=5`
+    );
+    const productoExacto = productos.find((producto) =>
+      [producto.original.sku, producto.original.objectID]
+        .some((valor) => String(valor ?? "").trim() === termino)
+    );
+
+    return productoExacto ? [productoExacto] : [];
+  }
+
+  if (termino.length < MINIMUM_SEARCH_LENGTH) {
+    return [];
+  }
+
+  return consultarProductosAlgolia(
+    `query=${encodeURIComponent(termino)}&hitsPerPage=5`
+  );
 }
 
 async function cargarDatosCAC() {
@@ -239,6 +261,7 @@ const copyDataButton = document.querySelector("#copy-data-button");
 const equipmentForm = document.querySelector("#equipo-form");
 const imeiInput = document.querySelector("#imei");
 const imeiStatus = document.querySelector("#imei-status");
+const imeiLookupStatus = document.querySelector("#imei-lookup-status");
 const numeroEmpleadoInput = document.querySelector("#numeroEmpleado");
 const numeroEmpleadoStatus = document.querySelector("#numero-empleado-status");
 const gacInput = document.querySelector("#gac");
@@ -275,6 +298,11 @@ const detailInputs = {
 };
 
 let displayedProducts = [];
+let imeiLookupRequestId = 0;
+let ultimoImeiConsultado = "";
+let materialConsultadoPorIMEI = "";
+let productDetailsRevision = 0;
+const imeiLookupRequests = new Map();
 let activeSuggestionIndex = -1;
 let searchRequestId = 0;
 let debounceTimer;
@@ -522,6 +550,195 @@ function mostrarEstadoIMEI(mensaje, esError = false) {
   imeiStatus.classList.toggle("is-error", esError);
 }
 
+function mostrarEstadoConsultaIMEI(mensaje, esError = false) {
+  imeiLookupStatus.textContent = mensaje;
+  imeiLookupStatus.classList.toggle("is-error", esError);
+}
+
+function seleccionarOperadorAlternativo() {
+  const normalizar = (valor) => valor
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es-MX");
+  const opcionOtro = Array.from(operadorSelect.options).find((opcion) =>
+    normalizar(opcion.value) === "otro" || normalizar(opcion.textContent) === "otro"
+  );
+  const opcionAlternativa = opcionOtro || operadorSelect.options[1];
+
+  if (!opcionAlternativa) {
+    return false;
+  }
+
+  operadorSelect.value = opcionAlternativa.value;
+  return true;
+}
+
+function manejarMensajeExtensionIMEI(event) {
+  const mensaje = event.data;
+  if (
+    event.source !== window
+    || mensaje?.source !== "micas-imei-extension"
+    || typeof mensaje.requestId !== "string"
+  ) {
+    return;
+  }
+
+  const solicitud = imeiLookupRequests.get(mensaje.requestId);
+  if (!solicitud) {
+    return;
+  }
+
+  if (mensaje.type === "accepted") {
+    clearTimeout(solicitud.availabilityTimeout);
+    solicitud.resultTimeout = setTimeout(() => {
+      imeiLookupRequests.delete(mensaje.requestId);
+      solicitud.resolve({ status: "error", message: "La consulta a la intranet agotó el tiempo de espera." });
+    }, 30000);
+  } else if (mensaje.type === "result") {
+    clearTimeout(solicitud.availabilityTimeout);
+    clearTimeout(solicitud.resultTimeout);
+    imeiLookupRequests.delete(mensaje.requestId);
+    solicitud.resolve(mensaje.result);
+  }
+}
+
+window.addEventListener("message", manejarMensajeExtensionIMEI);
+
+function consultarExtensionIMEI(imei) {
+  const requestId = crypto.randomUUID();
+
+  return new Promise((resolve) => {
+    const solicitud = {
+      resolve,
+      availabilityTimeout: setTimeout(() => {
+        imeiLookupRequests.delete(requestId);
+        resolve({
+          status: "error",
+          message: "No se detectó extensión para busqueda de Material"
+        });
+      }, 1800),
+      resultTimeout: 0
+    };
+
+    imeiLookupRequests.set(requestId, solicitud);
+    window.postMessage({
+      source: "micas-form",
+      type: "lookup-material",
+      requestId,
+      imei
+    }, "*");
+  });
+}
+
+function limpiarMaterialConsultadoIMEI() {
+  if (
+    materialConsultadoPorIMEI
+    && detailInputs.identifier.value === materialConsultadoPorIMEI
+  ) {
+    detailInputs.identifier.value = "";
+    detailInputs.identifier.setCustomValidity("");
+  }
+
+  materialConsultadoPorIMEI = "";
+}
+
+async function consultarClaveMaterialIMEI(imei) {
+  if (imei === ultimoImeiConsultado) {
+    return;
+  }
+
+  const requestId = ++imeiLookupRequestId;
+  ultimoImeiConsultado = imei;
+  mostrarEstadoConsultaIMEI("Consultando Clave Material en la intranet...");
+
+  try {
+    const resultado = await consultarExtensionIMEI(imei);
+    if (requestId !== imeiLookupRequestId || imeiInput.value.trim() !== imei) {
+      return;
+    }
+
+    if (resultado?.status === "found" && /^7\d{6,7}$/.test(resultado.material)) {
+      detailInputs.identifier.value = resultado.material;
+      detailInputs.identifier.setCustomValidity("");
+      materialConsultadoPorIMEI = resultado.material;
+      const revisionDetalles = productDetailsRevision;
+      mostrarEstadoConsultaIMEI(`Material: ${resultado.material}. Buscando datos del equipo...`);
+
+      try {
+        const [producto] = await buscarEquipo(resultado.material, "sku");
+        if (
+          requestId !== imeiLookupRequestId
+          || imeiInput.value.trim() !== imei
+          || materialConsultadoPorIMEI !== resultado.material
+        ) {
+          return;
+        }
+
+        if (!producto) {
+          mostrarEstadoConsultaIMEI(
+            `Material: ${resultado.material}. No se encontró un equipo con esa Clave Material.`
+          );
+        } else if (revisionDetalles !== productDetailsRevision) {
+          mostrarEstadoConsultaIMEI(
+            `Material: ${resultado.material}. No se completaron los datos porque fueron modificados durante la búsqueda.`
+          );
+        } else {
+          selectedProduct = producto;
+          productDetailsRevision += 1;
+          searchRequestId += 1;
+          clearTimeout(debounceTimer);
+          displayedProducts = [];
+          searchInput.value = producto.displayName;
+          searchInput.setCustomValidity("");
+          ocultarSugerencias();
+          completarDatosProducto(producto);
+          mostrarEstadoConsultaIMEI(
+            `Material: ${resultado.material}. Marca, modelo y precio completados.`
+          );
+        }
+      } catch (error) {
+        if (
+          requestId !== imeiLookupRequestId
+          || imeiInput.value.trim() !== imei
+          || materialConsultadoPorIMEI !== resultado.material
+        ) {
+          return;
+        }
+        mostrarEstadoConsultaIMEI(
+          `Material: ${resultado.material}. No se pudieron consultar los datos del equipo: ${error.message || "error de búsqueda."}`,
+          true
+        );
+      }
+    } else if (resultado?.status === "not-found") {
+      mostrarEstadoConsultaIMEI("Sin Material para IMEI.");
+    } else if (resultado?.status === "sap-table-not-found") {
+      const operadorSeleccionado = seleccionarOperadorAlternativo();
+      mostrarEstadoConsultaIMEI(
+        operadorSeleccionado
+          ? "Equipo de otro Operador"
+          : "Equipo no Teclce, seleciona Operador",
+        !operadorSeleccionado
+      );
+    } else {
+      ultimoImeiConsultado = "";
+      mostrarEstadoConsultaIMEI(
+        resultado?.message || "No fue posible consultar Material.",
+        true
+      );
+    }
+  } catch (error) {
+    if (requestId !== imeiLookupRequestId) {
+      return;
+    }
+    ultimoImeiConsultado = "";
+    mostrarEstadoConsultaIMEI(
+      error.message || "No fue posible consultar Material.",
+      true
+    );
+  }
+}
+
 function actualizarValidacionFactura() {
   const factura = facturaInput.value.trim();
   facturaInput.setCustomValidity(
@@ -549,14 +766,32 @@ function actualizarValidacionFolio() {
   );
 }
 
-imeiInput.addEventListener("input", () => actualizarValidacionIMEI());
-imeiInput.addEventListener("blur", () => actualizarValidacionIMEI(true));
+imeiInput.addEventListener("input", () => {
+  imeiLookupRequestId += 1;
+  ultimoImeiConsultado = "";
+  limpiarMaterialConsultadoIMEI();
+  mostrarEstadoConsultaIMEI("");
+  actualizarValidacionIMEI();
+});
+imeiInput.addEventListener("blur", () => {
+  const imeiValido = actualizarValidacionIMEI(true);
+  const imei = imeiInput.value.trim();
+  if (imeiValido && imei) {
+    void consultarClaveMaterialIMEI(imei);
+  }
+});
 folioInput.addEventListener("input", actualizarValidacionFolio);
 for (const input of [detailInputs.brand, detailInputs.model]) {
   input.addEventListener("input", () => {
+    productDetailsRevision += 1;
     const cursorPosition = input.selectionStart;
     input.value = input.value.toLocaleUpperCase("es-MX");
     input.setSelectionRange(cursorPosition, cursorPosition);
+  });
+}
+for (const input of [detailInputs.identifier, detailInputs.productPrice]) {
+  input.addEventListener("input", () => {
+    productDetailsRevision += 1;
   });
 }
 
@@ -763,19 +998,25 @@ function seleccionarProducto(index) {
   }
 
   selectedProduct = producto;
+  productDetailsRevision += 1;
   searchInput.setCustomValidity("");
-  detailInputs.brand.value = producto.brand.toLocaleUpperCase("es-MX");
-  detailInputs.model.value = producto.model.toLocaleUpperCase("es-MX");
+  completarDatosProducto(producto);
   detailInputs.identifier.value = producto.identifier;
-  const precio = String(producto.productPrice ?? "").trim();
-  detailInputs.productPrice.value = precio && !precio.startsWith("$") ? `$${precio}` : precio;
   searchInput.value = producto.displayName;
   ocultarSugerencias();
   mostrarEstado(`Equipo seleccionado: ${producto.displayName}`);
 }
 
+function completarDatosProducto(producto) {
+  detailInputs.brand.value = producto.brand.toLocaleUpperCase("es-MX");
+  detailInputs.model.value = producto.model.toLocaleUpperCase("es-MX");
+  const precio = String(producto.productPrice ?? "").trim();
+  detailInputs.productPrice.value = precio && !precio.startsWith("$") ? `$${precio}` : precio;
+}
+
 function limpiarProductoSeleccionado() {
   selectedProduct = null;
+  productDetailsRevision += 1;
   Object.values(detailInputs).forEach((input) => {
     input.value = "";
   });
@@ -789,12 +1030,12 @@ function validarDatosProducto() {
     detailInputs.identifier.value = "N/A";
   }
 
-  const identificadorValido = /^7\d{6}$/.test(detailInputs.identifier.value)
+  const identificadorValido = /^7\d{6,7}$/.test(detailInputs.identifier.value)
     || detailInputs.identifier.value.toLocaleUpperCase("es-MX") === "N/A";
   detailInputs.identifier.setCustomValidity(
     identificadorValido
       ? ""
-      : "El material debe tener 7 dígitos y comenzar con 7, o ser N/A."
+      : "La Clave Material debe tener 7 u 8 dígitos y comenzar con 7, o ser N/A."
   );
 
   const precioTexto = detailInputs.productPrice.value.trim();
@@ -851,7 +1092,7 @@ function primerErrorDeCopia() {
   for (const [input, mensaje] of [
     [detailInputs.brand, "Ingresa la marca del equipo."],
     [detailInputs.model, "Ingresa el modelo del equipo."],
-    [detailInputs.identifier, "Ingresa un material válido: 7 dígitos que comiencen con 7 o N/A."],
+    [detailInputs.identifier, "Ingresa una Clave Material válida: 7 u 8 dígitos que comiencen con 7 o N/A."],
     [detailInputs.productPrice, "Ingresa un precio numérico mayor que 0."]
   ]) {
     if (!input.value.trim()) {
@@ -1094,6 +1335,10 @@ document.addEventListener("click", (event) => {
 
 equipmentForm.addEventListener("reset", () => {
   setTimeout(() => {
+    imeiLookupRequestId += 1;
+    ultimoImeiConsultado = "";
+    materialConsultadoPorIMEI = "";
+    mostrarEstadoConsultaIMEI("");
     limpiarProductoSeleccionado();
     displayedProducts = [];
     searchRequestId += 1;
