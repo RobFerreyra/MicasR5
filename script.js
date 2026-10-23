@@ -650,7 +650,7 @@ async function consultarClaveMaterialIMEI(imei) {
 
   const requestId = ++imeiLookupRequestId;
   ultimoImeiConsultado = imei;
-  mostrarEstadoConsultaIMEI("Consultando Clave Material en la intranet...");
+  mostrarEstadoConsultaIMEI("Consultando Material en la intranet...");
 
   try {
     const resultado = await consultarExtensionIMEI(imei);
@@ -677,7 +677,7 @@ async function consultarClaveMaterialIMEI(imei) {
 
         if (!producto) {
           mostrarEstadoConsultaIMEI(
-            `Material: ${resultado.material}. No se encontró un equipo con esa Clave Material.`
+            `Material: ${resultado.material}. No se encontró un equipo con ese Material.`
           );
         } else if (revisionDetalles !== productDetailsRevision) {
           mostrarEstadoConsultaIMEI(
@@ -693,9 +693,9 @@ async function consultarClaveMaterialIMEI(imei) {
           searchInput.setCustomValidity("");
           ocultarSugerencias();
           completarDatosProducto(producto);
-          mostrarEstadoConsultaIMEI(
-            `Material: ${resultado.material}. Marca, modelo y precio completados.`
-          );
+          // mostrarEstadoConsultaIMEI(
+          //  `Material: ${resultado.material}. Marca, modelo y precio completados.`
+          //);
         }
       } catch (error) {
         if (
